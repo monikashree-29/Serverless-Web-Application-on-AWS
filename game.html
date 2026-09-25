@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Catch The Fruit — Advanced HTML Canvas Game</title>
+<style>
+body{margin:0;font-family:system-ui;background:#000;display:flex;justify-content:center;align-items:center;height:100vh;color:#fff;}
+.container{max-width:850px;width:100%;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;padding:16px;box-shadow:0 8px 30px rgba(2,6,23,0.6);margin:0 auto;}
+canvas{width:100%;max-width:800px;border-radius:8px;cursor:pointer;background:#111;display:block;margin:0 auto;}
+.hud{display:flex;gap:12px;margin:8px 0;font-size:16px;flex-wrap:wrap;justify-content:center;}
+.controls{display:flex;gap:10px;margin-top:8px;justify-content:center;}
+button{padding:6px 14px;border:none;border-radius:6px;background:#3b82f6;color:#fff;cursor:pointer;transition:background 0.2s,transform 0.1s;}
+button:hover{background:#2563eb;transform:scale(1.05);}
+button:active{transform:scale(0.95);}
+.start-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:400px;text-align:center;}
+.start-screen input{padding:8px;border-radius:6px;border:none;width:220px;margin-bottom:10px;}
+.hint{text-align:center;}
+@media (max-width:600px){.hud{font-size:14px;gap:8px;}.controls{gap:8px;}button{padding:4px 10px;}}
+</style>
+</head>
+<body>
+<div class="container">
+  
+  <!-- Start Screen -->
+  <div id="startScreen" class="start-screen">
+    <h2>🎮 Catch The Fruit</h2>
+    <p>Enter your name to start:</p>
+    <input type="text" id="nameInput" placeholder="Your Name">
+    <button id="startBtn">Start Game</button>
+  </div>
+
+  <!-- Game Screen -->
+  <div id="gameScreen" style="display:none;">
+    <div class="hud">
+      Player: <strong id="playerName">Guest</strong> | 
+      Score: <strong id="score">0</strong> | 
+      Lives: <strong id="lives">3</strong> | 
+      Level: <strong id="level">1</strong> | 
+      Highscore: <strong id="high">0</strong> | 
+      Last Score: <strong id="lastScore">0</strong>
+    </div>
+    <canvas id="game" width="800" height="500"></canvas>
+    <div class="controls">
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="hint" style="margin-top:5px;font-size:14px;color:#aaa;">Use ← → or A/D keys or touch/drag. Click canvas to start/restart.</div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  const startScreen = document.getElementById('startScreen');
+  const gameScreen = document.getElementById('gameScreen');
+  const nameInput = document.getElementById('nameInput');
+  const startBtn = document.getElementById('startBtn');
+  const playerNameEl = document.getElementById('playerName');
+
+  let playerName = "Guest";
+
+  startBtn.onclick = () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      alert("Please enter your name before starting!");
+      return;
+    }
+    playerName = name;
+    localStorage.setItem('ctf_name', playerName);
+    playerNameEl.textContent = playerName;
+    startScreen.style.display = "none";
+    gameScreen.style.display = "block";
+    initGame();
+  };
+
+  function initGame() {
+    const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score'), livesEl = document.getElementById('lives'),
+          levelEl = document.getElementById('level'), highEl = document.getElementById('high'),
+          lastScoreEl = document.getElementById('lastScore');
+    const pauseBtn = document.getElementById('pauseBtn'), resetBtn = document.getElementById('resetBtn');
+
+    const W = canvas.width, H = canvas.height;
+    let running = false, paused = false, score = 0, lives = 3, level = 1, combo = 0;
+    let high = Number(localStorage.getItem('ctf_high') || 0);
+    highEl.textContent = high;
+
+    let fruits = [], particles = [], spawnTimer = 0, spawnInterval = 90, gravity = 1.5;
+    let slowTimer = 0, doubleTimer = 0, slowFactor = 1, scoreMultiplier = 1;
+    const player = { w: 120, h: 28, x: (W - 120) / 2, y: H - 38, speed: 6, vx: 0 };
+    const fruitTypes = [
+      { emoji: '🍎', score: 10, prob: 0.2 },
+      { emoji: '🍌', score: 12, prob: 0.2 },
+      { emoji: '🍇', score: 15, prob: 0.2 },
+      { emoji: '🍒', score: 20, prob: 0.15 },
+      { emoji: '💣', score: -1, prob: 0.1 },
+      { emoji: '❤️', score: 0, power: 'extra_life', prob: 0.05 },
+      { emoji: '⏳', score: 0, power: 'slow_motion', prob: 0.05 },
+      { emoji: '🔥', score: 0, power: 'double_points', prob: 0.05 }
+    ];
+    const totalProb = fruitTypes.reduce((sum, t) => sum + t.prob, 0);
+
+    // Background animation
+    let bgTime = 0, bgColors = [
+      ['#ff7eb3', '#ff758c', '#ffa34d', '#ffda77'], // Day
+      ['#6a11cb', '#2575fc', '#ff758c', '#ffda77'], // Sunset
+      ['#0f0c29', '#302b63', '#24243e', '#6a11cb']  // Night
+    ];
+    let bgPhase = 0;
+
+    // start game on canvas click
+    canvas.addEventListener('click', () => { if (!running) start(); });
+
+    // basket controls
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.key] = true);
+    window.addEventListener('keyup', e => keys[e.key] = false);
+    let touching = false;
+    canvas.addEventListener("touchstart", (e) => {
+      touching = true; moveBasket(e.touches[0].clientX);
+      if (!running) start();
+    });
+    canvas.addEventListener("touchmove", (e) => {
+      if (touching) moveBasket(e.touches[0].clientX);
+    });
+    canvas.addEventListener("touchend", () => { touching = false; });
+
+    function moveBasket(x) {
+      const rect = canvas.getBoundingClientRect();
+      player.x = x - rect.left - player.w / 2;
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > W) player.x = W - player.w;
+    }
+
+    function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+
+    function weightedRandomType() {
+      let rand = Math.random() * totalProb;
+      for (let t of fruitTypes) {
+        rand -= t.prob;
+        if (rand <= 0) return t;
+      }
+      return fruitTypes[0];
+    }
+
+    function start() {
+      running = true; paused = false; score = 0; lives = 3; level = 1; combo = 0;
+      spawnInterval = 90; gravity = 1.5; fruits.length = 0; particles.length = 0;
+      slowTimer = 0; doubleTimer = 0; slowFactor = 1; scoreMultiplier = 1;
+      player.x = (W - player.w) / 2; player.vx = 0;
+      updateHUD(); loop();
+    }
+
+    function updateHUD() {
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      levelEl.textContent = level;
+    }
+
+    function spawnFruit() {
+      const t = weightedRandomType();
+      const size = randInt(26, 44);
+      fruits.push({ x: randInt(20, W - 20), y: -size, w: size, h: size, emoji: t.emoji, vy: randInt(1, 2) + gravity / 2, score: t.score, power: t.power });
+    }
+
+    function createParticles(x, y, count = 10) {
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 4,
+          vy: (Math.random() - 0.5) * 4 - 2,
+          size: randInt(2, 6),
+          alpha: 1,
+          color: `hsl(${randInt(0,360)},100%,50%)`
+        });
+      }
+    }
+
+    function update() {
+      if (keys["ArrowLeft"] || keys["a"]) player.vx = -player.speed;
+      else if (keys["ArrowRight"] || keys["d"]) player.vx = player.speed;
+      else player.vx = 0;
+      player.x += player.vx;
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > W) player.x = W - player.w;
+
+      spawnTimer++;
+      if (spawnTimer >= spawnInterval) { spawnTimer = 0; spawnFruit(); }
+
+      // Timers
+      if (slowTimer > 0) { slowTimer--; if (slowTimer === 0) slowFactor = 1; }
+      if (doubleTimer > 0) { doubleTimer--; if (doubleTimer === 0) scoreMultiplier = 1; }
+
+      for (let i = fruits.length - 1; i >= 0; i--) {
+        const f = fruits[i];
+        f.vy += 0.03 * slowFactor;
+        f.y += f.vy * slowFactor;
+        if (f.y + f.h >= player.y && f.y <= player.y + player.h && f.x + f.w >= player.x && f.x <= player.x + player.w) {
+          if (f.score < 0) { // Bomb
+            lives--; flash('#ff4d4f'); combo = 0;
+          } else if (f.power) { // Power-up
+            if (f.power === 'extra_life') lives++;
+            else if (f.power === 'slow_motion') { slowTimer = 5 * 60; slowFactor = 0.5; }
+            else if (f.power === 'double_points') { doubleTimer = 10 * 60; scoreMultiplier = 2; }
+            createParticles(f.x + f.w / 2, f.y + f.h / 2, 15);
+            combo = 0;
+          } else { // Fruit
+            let addScore = f.score * scoreMultiplier;
+            combo++;
+            if (combo >= 3) {
+              addScore += combo * 5;
+              createParticles(f.x + f.w / 2, f.y + f.h / 2, 20);
+            } else {
+              createParticles(f.x + f.w / 2, f.y + f.h / 2);
+            }
+            score += addScore;
+            if (score >= level * 100) {
+              level++; gravity += 0.3; spawnInterval = Math.max(40, spawnInterval - 6);
+            }
+          }
+          fruits.splice(i, 1);
+        } else if (f.y > H + 50) {
+          if (f.score > 0 && !f.power) { lives--; combo = 0; }
+          fruits.splice(i, 1);
+        }
+      }
+
+      // Update particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.02;
+        p.size *= 0.98;
+        if (p.alpha <= 0) particles.splice(i, 1);
+      }
+
+      updateHUD();
+      if (lives <= 0) gameOver();
+    }
+
+    let flashColor = null, flashAlpha = 0;
+    function flash(col) { flashColor = col; flashAlpha = 0.6; }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      // Animated background
+      bgTime += 0.005;
+      if (bgTime >= 1) { bgTime = 0; bgPhase = (bgPhase + 1) % bgColors.length; }
+      const colors1 = bgColors[bgPhase];
+      const colors2 = bgColors[(bgPhase + 1) % bgColors.length];
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      for (let i = 0; i < 4; i++) {
+        const c1 = hexToRgb(colors1[i]), c2 = hexToRgb(colors2[i]);
+        const color = `rgb(${lerp(c1[0], c2[0], bgTime)}, ${lerp(c1[1], c2[1], bgTime)}, ${lerp(c1[2], c2[2], bgTime)})`;
+        g.addColorStop(i / 3, color);
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // Fruits with shadow
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = 5;
+      ctx.shadowOffsetX = 2;
+      ctx.shadowOffsetY = 2;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const f of fruits) {
+        ctx.font = (f.h - 6) + 'px serif';
+        ctx.fillText(f.emoji, f.x + f.w / 2, f.y + f.h / 2);
+      }
+      ctx.shadowColor = 'transparent';
+
+      // Basket with gradient and rounded corners
+      const basketGrad = ctx.createLinearGradient(player.x, player.y, player.x, player.y + player.h);
+      basketGrad.addColorStop(0, '#60a5fa');
+      basketGrad.addColorStop(1, '#3b82f6');
+      ctx.fillStyle = basketGrad;
+      ctx.beginPath();
+      ctx.roundRect(player.x, player.y, player.w, player.h, 10);
+      ctx.fill();
+
+      // Particles
+      for (const p of particles) {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.alpha;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      if (flashAlpha > 0 && flashColor) {
+        ctx.fillStyle = flashColor;
+        ctx.globalAlpha = flashAlpha;
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+        flashAlpha *= 0.9;
+        if (flashAlpha < 0.02) flashAlpha = 0;
+      }
+
+      if (!running) {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '22px system-ui';
+        ctx.fillText('Click Canvas to Play', W / 2, H / 2);
+      }
+
+      if (paused) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '40px system-ui';
+        ctx.fillText('Paused', W / 2, H / 2);
+      }
+    }
+
+    function loop() {
+      if (!running || paused) return;
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      running = false;
+      paused = false;
+      if (score > high) {
+        high = score;
+        localStorage.setItem('ctf_high', high);
+        highEl.textContent = high;
+      }
+      lastScoreEl.textContent = score;
+      draw();
+      setTimeout(() => {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '28px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game Over, ' + playerName + '!', W / 2, H / 2 - 80);
+        
+        // Animated score display
+        ctx.fillStyle = '#ffd700'; // Gold color
+        ctx.font = '32px system-ui';
+        const scale = 1 + 0.1 * Math.sin(Date.now() / 200); // Pulsing effect
+        ctx.save();
+        ctx.translate(W / 2, H / 2 - 20);
+        ctx.scale(scale, scale);
+        ctx.fillText('Your Score: ' + score, 0, 0);
+        ctx.restore();
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px system-ui';
+        ctx.fillText('Highscore: ' + high, W / 2, H / 2 + 20);
+        ctx.font = '14px system-ui';
+        ctx.fillText('Returning to Start Screen...', W / 2, H / 2 + 60);
+        setTimeout(() => {
+          gameScreen.style.display = 'none';
+          startScreen.style.display = 'flex';
+          nameInput.value = '';
+          score = 0; lives = 3; level = 1; combo = 0;
+          fruits = []; particles = []; spawnTimer = 0;
+          spawnInterval = 90; gravity = 1.5;
+          slowTimer = 0; doubleTimer = 0; slowFactor = 1; scoreMultiplier = 1;
+          player.x = (W - player.w) / 2; player.vx = 0;
+          updateHUD();
+        }, 2000);
+      }, 80);
+    }
+
+    // Pause & Reset buttons
+    pauseBtn.onclick = () => {
+      if (running) {
+        paused = !paused;
+        pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+        if (!paused) loop();
+        else draw();
+      }
+    };
+    resetBtn.onclick = () => {
+      running = false; paused = false; score = 0; lives = 3; level = 1; combo = 0;
+      fruits = []; particles = []; spawnTimer = 0; updateHUD(); draw();
+    };
+
+    // Helper functions
+    function hexToRgb(hex) {
+      const bigint = parseInt(hex.slice(1), 16);
+      return [(bigint >> 16) & 255, (bigint >> 8) & 255, bigint & 255];
+    }
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    draw();
+  }
+})();
+</script>
+</body>
+</html>
